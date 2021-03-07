@@ -6,15 +6,14 @@ import android.webkit.WebView
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.core.app.NotificationManagerCompat
 import androidx.multidex.MultiDexApplication
+import androidx.room.Room
 import com.google.android.gms.common.GooglePlayServicesNotAvailableException
 import com.google.android.gms.security.ProviderInstaller
 import com.google.firebase.remoteconfig.FirebaseRemoteConfig
 import com.google.firebase.remoteconfig.FirebaseRemoteConfigSettings
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
-import io.github.gmathi.novellibrary.database.DBHelper
-import io.github.gmathi.novellibrary.database.deleteWebPageSettings
-import io.github.gmathi.novellibrary.database.deleteWebPages
+import io.github.gmathi.novellibrary.database.*
 import io.github.gmathi.novellibrary.model.other.SelectorQuery
 import io.github.gmathi.novellibrary.network.HostNames
 import io.github.gmathi.novellibrary.network.MultiTrustManager
@@ -23,6 +22,7 @@ import io.github.gmathi.novellibrary.util.Constants
 import io.github.gmathi.novellibrary.util.DataCenter
 import io.github.gmathi.novellibrary.util.Logs
 import io.github.gmathi.novellibrary.util.lang.LocaleManager
+import io.github.gmathi.novellibrary.util.lang.launchIO
 import java.io.File
 import java.security.KeyManagementException
 import java.security.NoSuchAlgorithmException
@@ -36,25 +36,26 @@ val dataCenter: DataCenter by lazy {
     NovelLibraryApplication.dataCenter!!
 }
 
-val dbHelper: DBHelper by lazy {
-    NovelLibraryApplication.dbHelper!!
-}
+lateinit var db: AppDatabase
 
 class NovelLibraryApplication : MultiDexApplication() {
     companion object {
         var dataCenter: DataCenter? = null
-        var dbHelper: DBHelper? = null
+        lateinit var context: Context
 
         private const val TAG = "NovelLibraryApplication"
 
         fun refreshDBHelper(context: Context) {
-            dbHelper = DBHelper.refreshInstance(context)
         }
     }
 
     override fun onCreate() {
+        context = applicationContext
+
         dataCenter = DataCenter(applicationContext)
-        dbHelper = DBHelper.getInstance(applicationContext)
+        
+        db = AppDatabase.createInstance(applicationContext)
+
         val date = Calendar.getInstance()
         if (date.get(Calendar.MONTH) == 4 && date.get(Calendar.DAY_OF_MONTH) == 1) {
             if (!dataCenter?.fooled!!) {
@@ -68,9 +69,12 @@ class NovelLibraryApplication : MultiDexApplication() {
             deleteOldNotificationChannels()
         }
 
+        db.insertDefaults()
         //Stray webPages to be deleted
-        dbHelper?.deleteWebPages(-1L)
-        dbHelper?.deleteWebPageSettings(-1L)
+        launchIO {
+            db.webPageDao().deleteByNovelId(-1L)
+            db.webPageSettingsDao().deleteByNovelId(-1L)
+        }
 
 //        dataCenter?.isDeveloper = true
 //        dataCenter?.lockRoyalRoad = false

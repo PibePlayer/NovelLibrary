@@ -105,7 +105,7 @@ class GenericAdapter<T>(val items: ArrayList<T>, val layoutResId: Int, val liste
             notifyItemChanged(index)
         }
     }
-
+    
     fun updateItemAt(index: Int, item: T) {
         items.removeAt(index)
         items.add(index, item)

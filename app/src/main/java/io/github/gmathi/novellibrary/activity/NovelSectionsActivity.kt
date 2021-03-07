@@ -22,12 +22,13 @@ import io.github.gmathi.novellibrary.dataCenter
 import io.github.gmathi.novellibrary.database.*
 import io.github.gmathi.novellibrary.databinding.ActivityNovelSectionsBinding
 import io.github.gmathi.novellibrary.databinding.ListitemNovelSectionBinding
-import io.github.gmathi.novellibrary.dbHelper
+import io.github.gmathi.novellibrary.db
 import io.github.gmathi.novellibrary.extensions.FAC
 import io.github.gmathi.novellibrary.extensions.showEmpty
 import io.github.gmathi.novellibrary.extensions.showLoading
 import io.github.gmathi.novellibrary.model.database.NovelSection
 import io.github.gmathi.novellibrary.network.sync.NovelSync
+import io.github.gmathi.novellibrary.util.Logs
 import io.github.gmathi.novellibrary.util.view.CustomDividerItemDecoration
 import io.github.gmathi.novellibrary.util.view.SimpleItemTouchHelperCallback
 import io.github.gmathi.novellibrary.util.view.SimpleItemTouchListener
@@ -35,6 +36,7 @@ import io.github.gmathi.novellibrary.util.setDefaults
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.lang.Exception
 
 class NovelSectionsActivity : BaseActivity(), GenericAdapter.Listener<NovelSection>, SimpleItemTouchListener {
 
@@ -67,7 +69,7 @@ class NovelSectionsActivity : BaseActivity(), GenericAdapter.Listener<NovelSecti
 
     private fun setData() {
         updateOrderIds()
-        val novelSections = dbHelper.getAllNovelSections()
+        val novelSections = db.novelSectionDao().getAll()
         adapter.updateData(ArrayList(novelSections))
         if (binding.contentRecyclerView.swipeRefreshLayout != null && binding.contentRecyclerView.progressLayout != null) {
             binding.contentRecyclerView.swipeRefreshLayout.isRefreshing = false
@@ -87,7 +89,9 @@ class NovelSectionsActivity : BaseActivity(), GenericAdapter.Listener<NovelSecti
     private fun updateOrderIds() {
         if (adapter.items.isNotEmpty())
             for (i in 0 until adapter.items.size) {
-                dbHelper.updateNovelSectionOrderId(adapter.items[i].id, i.toLong())
+                val novelSection = adapter.items[i]
+                novelSection.orderId = i.toLong()
+                db.novelSectionDao().update(novelSection)
             }
     }
 
@@ -167,8 +171,9 @@ class NovelSectionsActivity : BaseActivity(), GenericAdapter.Listener<NovelSecti
                 this@NovelSectionsActivity.run {
                     val novelSection = adapter.items[position]
                     if (novelSection.id != -1L) {
-                        dbHelper.getAllNovels(novelSection.id).forEach {
-                            dbHelper.updateNovelSectionId(it.id, -1L)
+                        db.novelDao().findByNovelSection(novelSection.id).forEach {
+                            it.novelSectionId = -1L
+                            db.novelDao().update(it)
                             NovelSync.getInstance(it)?.applyAsync(lifecycleScope) { sync ->
                                 if (dataCenter.getSyncAddNovels(sync.host)) sync.updateNovel(
                                     it,
@@ -176,11 +181,15 @@ class NovelSectionsActivity : BaseActivity(), GenericAdapter.Listener<NovelSecti
                                 )
                             }
                         }
-                        dbHelper.deleteNovelSection(novelSection.id)
+                        db.novelSectionDao().delete(novelSection)
                     }
                     setData()
-                    firebaseAnalytics.logEvent(FAC.Event.REMOVE_NOVEL_SECTION) {
-                        param(FAC.Param.NOVEL_SECTION_NAME, novelSection.name ?: "N/A")
+                    try {
+                        firebaseAnalytics.logEvent(FAC.Event.REMOVE_NOVEL_SECTION) {
+                            param(FAC.Param.NOVEL_SECTION_NAME, novelSection.name ?: "N/A")
+                        }
+                    } catch (ex: Exception) {
+                        Logs.error(this::class.simpleName, ex.message)
                     }
                     dialog.dismiss()
                 }
@@ -200,8 +209,9 @@ class NovelSectionsActivity : BaseActivity(), GenericAdapter.Listener<NovelSecti
             title(R.string.rename)
             input(hintRes = R.string.novel_section_name, prefill = novelSection.name) { dialog, input ->
                 val newName = input.trim().toString()
-                if (newName.isNotBlank() && dbHelper.getNovelSection(newName) == null) {
-                    dbHelper.updateNovelSectionName(novelSection.id, newName)
+                if (newName.isNotBlank() && db.novelSectionDao().findOneByName(newName) == null) {
+                    novelSection.name = newName
+                    db.novelSectionDao().update(novelSection)
                     setData()
                     val oldName = novelSection.name
                     lifecycleScope.launch {
@@ -238,8 +248,8 @@ class NovelSectionsActivity : BaseActivity(), GenericAdapter.Listener<NovelSecti
             message(R.string.add_novel_section_description)
             input(hintRes = R.string.novel_section_name) { dialog, input ->
                 val name = input.trim().toString()
-                if (name.isNotBlank() && dbHelper.getNovelSection(name) == null) {
-                    dbHelper.createNovelSection(name)
+                if (name.isNotBlank() && db.novelSectionDao().findOneByName(name) == null) {
+                    db.novelSectionDao().insert(NovelSection(0L, name))
                     setData()
                     firebaseAnalytics.logEvent(FAC.Event.ADD_NOVEL_SECTION) {
                         param(FAC.Param.NOVEL_SECTION_NAME, name)

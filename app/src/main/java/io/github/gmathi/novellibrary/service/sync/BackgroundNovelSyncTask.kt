@@ -28,21 +28,21 @@ import java.util.concurrent.TimeUnit
 class BackgroundNovelSyncTask(val context: Context, params: WorkerParameters) : Worker(context, params) {
 
     override fun doWork(): Result {
-        val dbHelper = DBHelper.getInstance(context)
+        val db = AppDatabase.createInstance(context)
 
         // Enable the below line only in debug mode for triggering breakpoints
         // android.os.Debug.waitForDebugger()
 
         try {
             if (Utils.isConnectedToNetwork(context))
-                startNovelsSync(dbHelper)
+                startNovelsSync(db)
         } catch (e: Exception) {
             return Result.retry()
         }
         return Result.success()
     }
 
-    private fun startNovelsSync(dbHelper: DBHelper) {
+    private fun startNovelsSync(db: AppDatabase) {
         Logs.debug(TAG, "start novel sync")
 
         //For Testing - get a Novel and delete 5 chapters
@@ -52,7 +52,7 @@ class BackgroundNovelSyncTask(val context: Context, params: WorkerParameters) : 
 
         val totalCountMap: HashMap<Novel, Int> = HashMap()
 
-        val novels = dbHelper.getAllNovels()
+        val novels = db.novelDao().getAll()
         novels.forEach {
             try {
                 val totalChapters = NovelApi.getChapterCount(it)
@@ -68,19 +68,20 @@ class BackgroundNovelSyncTask(val context: Context, params: WorkerParameters) : 
         if (totalCountMap.isEmpty()) return
 
         //Update DB with new chapters
-        dbHelper.writableDatabase.runTransaction { writableDatabase ->
+        db.runInTransaction {
             totalCountMap.forEach {
                 val novel = it.key
                 novel.metadata[Constants.MetaDataKeys.LAST_UPDATED_DATE] = Utils.getCurrentFormattedDate()
-                dbHelper.updateNovelMetaData(novel, writableDatabase)
-                dbHelper.updateChaptersAndReleasesCount(novel.id, it.value.toLong(), novel.newReleasesCount + (it.value - novel.chaptersCount), writableDatabase)
-                updateChapters(novel, dbHelper)
-            }
+                novel.chaptersCount = it.value.toLong()
+                novel.newReleasesCount += it.value - novel.chaptersCount
+                db.novelDao().update(novel)
+                updateChapters(novel, db)
+		    }
         }
 
         val novelsList: ArrayList<Novel> = ArrayList()
         totalCountMap.forEach {
-            val novel = dbHelper.getNovel(it.key.id)!!
+            val novel = db.novelDao().findOneById(it.key.id)!!
             novelsList.add(novel)
         }
 
@@ -104,18 +105,23 @@ class BackgroundNovelSyncTask(val context: Context, params: WorkerParameters) : 
     /**
      * Download latest chapters from network
      */
-    private fun updateChapters(novel: Novel, dbHelper: DBHelper) {
-        //TODO: Handle Empty State
-        val chapters = NovelApi.getChapterUrls(novel) ?: ArrayList()
+    private fun updateChapters(novel: Novel, db: AppDatabase) {
         try {
-            dbHelper.writableDatabase.runTransaction { writableDatabase ->
+            //TODO: Handle Empty State
+            val chapters = NovelApi.getChapterUrls(novel) ?: ArrayList()
+
+            //Start transaction for faster insertions
+            db.runInTransaction {
                 for (i in 0 until chapters.size) {
-                    dbHelper.createWebPage(chapters[i], writableDatabase)
-                    dbHelper.createWebPageSettings(WebPageSettings(chapters[i].url, novel.id), writableDatabase)
+                    db.webPageDao().insertOrIgnore(chapters[i])
+                    db.webPageSettingsDao().insertOrIgnore(WebPageSettings(chapters[i].url, novel.id))
                 }
             }
+            //End Transaction
+
         } catch (e: Exception) {
             Logs.error(TAG, "Novel: $novel", e)
+        } finally {
         }
     }
 

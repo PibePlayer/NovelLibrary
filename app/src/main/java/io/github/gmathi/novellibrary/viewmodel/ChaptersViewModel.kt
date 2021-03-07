@@ -6,7 +6,7 @@ import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import io.github.gmathi.novellibrary.dataCenter
 import io.github.gmathi.novellibrary.database.*
-import io.github.gmathi.novellibrary.dbHelper
+import io.github.gmathi.novellibrary.db
 import io.github.gmathi.novellibrary.model.database.Download
 import io.github.gmathi.novellibrary.model.database.Novel
 import io.github.gmathi.novellibrary.model.database.WebPage
@@ -61,8 +61,9 @@ class ChaptersViewModel(private val state: SavedStateHandle) : ViewModel(), Life
             loadingStatus.value = Constants.Status.START
             withContext(Dispatchers.IO) {
                 if (novel.id != -1L) {
-                    dbHelper.getNovel(novel.id)?.let { setNovel(it) }
-                    dbHelper.updateNewReleasesCount(novel.id, 0L)
+                    db.novelDao().findOneById(novel.id)?.let { setNovel(it) }
+                    novel.newReleasesCount = 0L
+                    db.novelDao().update(novel)
                 }
             }
             getChapters(forceUpdate = forceUpdate)
@@ -96,7 +97,7 @@ class ChaptersViewModel(private val state: SavedStateHandle) : ViewModel(), Life
         showSources = !showSources
         viewModelScope.launch {
             novel.metadata[Constants.MetaDataKeys.SHOW_SOURCES] = showSources.toString()
-            withContext(Dispatchers.IO) { dbHelper.updateNovelMetaData(novel) }
+            withContext(Dispatchers.IO) { db.novelDao().update(novel) }
         }
         getData(true)
     }
@@ -111,15 +112,15 @@ class ChaptersViewModel(private val state: SavedStateHandle) : ViewModel(), Life
         try {
             if (!forceUpdate && novel.id != -1L) {
                 loadingStatus.postValue("Checking Cache…")
-                val chapters = dbHelper.getAllWebPages(novel.id)
-                val chapterSettings = dbHelper.getAllWebPageSettings(novel.id)
+                val chapters = db.webPageDao().findByNovelId(novel.id)
+                val chapterSettings = db.webPageSettingsDao().findByNovelId(novel.id)
 
                 if (chapters.isEmpty() || chapters.size < novel.chaptersCount.toInt()) {
                     novel.metadata[Constants.MetaDataKeys.LAST_UPDATED_DATE] = Utils.getCurrentFormattedDate()
-                    dbHelper.updateNovelMetaData(novel)
+                    db.novelDao().update(novel)
                 } else {
-                    this@ChaptersViewModel.chapters = chapters
-                    this@ChaptersViewModel.chapterSettings = chapterSettings
+                    this@ChaptersViewModel.chapters = ArrayList(chapters)
+                    this@ChaptersViewModel.chapterSettings = ArrayList(chapterSettings)
                     return@withContext
                 }
             }
@@ -140,38 +141,37 @@ class ChaptersViewModel(private val state: SavedStateHandle) : ViewModel(), Life
     private suspend fun addToDB(forceUpdate: Boolean) = withContext(Dispatchers.IO) {
         loadingStatus.postValue("Adding/Updating Cache…")
 
-        //DB transaction for faster insertions
-        dbHelper.writableDatabase.runTransaction { writableDatabase ->
-
+        //Start transaction for faster insertions
+        db.runInTransaction {
             if (forceUpdate) {
                 //Delete the current data
-                dbHelper.deleteWebPages(novel.id, writableDatabase)
-                chapters?.forEach { dbHelper.deleteWebPage(it.url, writableDatabase) }
+                db.webPageDao().deleteByNovelOrWebPages(novel.id, chapters ?: ArrayList())
 
                 // We will not delete chapter settings so as to not delete the downloaded chapters file location.
                 // dbHelper.deleteWebPageSettings(novel.id)
             }
 
-            val chaptersList = chapters ?: return@runTransaction
+            val chaptersList = chapters ?: return@runInTransaction
             val chaptersCount = chaptersList.size
-            dbHelper.updateChaptersCount(novel.id, chaptersCount.toLong(), writableDatabase)
-
+            novel.chaptersCount = chaptersCount.toLong()
+            db.novelDao().update(novel)
 
             for (i in 0 until chaptersCount) {
                 loadingStatus.postValue("Caching Chapters: $i/$chaptersCount")
-                dbHelper.createWebPage(chaptersList[i], writableDatabase)
-                dbHelper.createWebPageSettings(WebPageSettings(chaptersList[i].url, novel.id), writableDatabase)
+                db.webPageDao().insertOrReplace(chaptersList[i])
+                db.webPageSettingsDao().insertOrReplace(WebPageSettings(chaptersList[i].url, novel.id))
             }
         }
+        //End Transaction
 
-        chapters = dbHelper.getAllWebPages(novel.id)
-        chapterSettings = dbHelper.getAllWebPageSettings(novel.id)
+        chapters = ArrayList<WebPage>(db.webPageDao().findByNovelId(novel.id))
+        chapterSettings = ArrayList<WebPageSettings>(db.webPageSettingsDao().findByNovelId(novel.id))
     }
 
     fun addNovelToLibrary() {
         if (novel.id != -1L) return
         loadingStatus.value = Constants.Status.START
-        novel.id = dbHelper.insertNovel(novel)
+        novel.id = db.novelDao().insertNovel(novel)
         NovelSync.getInstance(novel)?.applyAsync(viewModelScope) { if (dataCenter.getSyncAddNovels(it.host)) it.addNovel(novel) }
         //There is a chance that the above insertion might fail
         if (novel.id == -1L) return
@@ -194,8 +194,8 @@ class ChaptersViewModel(private val state: SavedStateHandle) : ViewModel(), Life
                     callback?.let { it() }
                 }
                 DELETE_DOWNLOADS -> deleteDownloadedChapters(webPages)
-                MARK_READ -> updateReadStatus(webPages, markRead = true)
-                MARK_UNREAD -> updateReadStatus(webPages, markRead = false)
+                MARK_READ -> updateReadStatus(webPages,true)
+                MARK_UNREAD -> updateReadStatus(webPages, false)
                 MARK_FAVORITE -> updateFavoriteStatus(webPages, true)
                 REMOVE_FAVORITE -> updateFavoriteStatus(webPages, false)
             }
@@ -225,11 +225,11 @@ class ChaptersViewModel(private val state: SavedStateHandle) : ViewModel(), Life
                 if (otherLinkedPagesJsonString != null) {
                     val linkedPages: ArrayList<WebPage> = Gson().fromJson(otherLinkedPagesJsonString, object : TypeToken<java.util.ArrayList<WebPage>>() {}.type)
                     linkedPages.forEach {
-                        val linkedWebPageSettings = dbHelper.getWebPageSettings(it.url)
+                        val linkedWebPageSettings = db.webPageSettingsDao().findOneByUrl(it.url)
                         if (linkedWebPageSettings?.filePath != null) {
                             val linkedFile = File(linkedWebPageSettings.filePath!!)
                             linkedFile.delete()
-                            dbHelper.deleteWebPageSettings(linkedWebPageSettings.url)
+                            db.webPageSettingsDao().delete(linkedWebPageSettings)
                         }
                     }
                     webPageSettings.metadata[Constants.MetaDataKeys.OTHER_LINKED_WEB_PAGES] = "[]"
@@ -237,45 +237,47 @@ class ChaptersViewModel(private val state: SavedStateHandle) : ViewModel(), Life
             } catch (e: Exception) {
                 Logs.error(TAG, "Delete WebPage: $webPage", e)
             }
-            dbHelper.updateWebPageSettings(webPageSettings)
+            db.webPageSettingsDao().update(webPageSettings)
         }
     }
 
     private suspend fun addChaptersToDownloadQueue(webPages: List<WebPage>) = withContext(Dispatchers.IO) {
         var counter = 0
-        dbHelper.writableDatabase.runTransaction { writableDatabase ->
+        db.runInTransaction {
             webPages.forEach {
                 val download = Download(it.url, novel.name, it.chapter)
                 download.orderId = it.orderId.toInt()
-                dbHelper.createDownload(download, writableDatabase)
+                db.downloadDao().insert(download)
                 actionModeProgress.postValue(counter++.toString())
             }
         }
     }
 
-    private suspend fun updateReadStatus(webPages: ArrayList<WebPage>, markRead: Boolean) = withContext(Dispatchers.IO) {
+    private suspend fun updateReadStatus(webPages: ArrayList<WebPage>, readStatus: Boolean) = withContext(Dispatchers.IO) {
         var counter = 0
         val chapters = ArrayList(webPages)
-        val chaptersSettingsList = chapterSettings ?: return@withContext
-        dbHelper.writableDatabase.runTransaction { writableDatabase ->
+        db.runInTransaction {
             chapters.forEach { webPage ->
-                val webPageSettings = chaptersSettingsList.firstOrNull { it.url == webPage.url } ?: return@runTransaction
-                dbHelper.updateWebPageSettingsReadStatus(webPageSettings, markRead, writableDatabase)
+                val chaptersSettingsList = chapterSettings ?: return@forEach
+                val webPageSettings = chaptersSettingsList.firstOrNull { it.url == webPage.url }
+                        ?: return@forEach
+                webPageSettings.isRead = if (readStatus) 1 else 0
+                db.webPageSettingsDao().updateWebPageSettingsReadStatus(webPageSettings)
                 actionModeProgress.postValue(counter++.toString())
             }
         }
-        chapterSettings = dbHelper.getAllWebPageSettings(novel.id)
+        chapterSettings = ArrayList(db.webPageSettingsDao().findByNovelId(novel.id))
     }
 
     private suspend fun updateFavoriteStatus(webPages: ArrayList<WebPage>, favoriteStatus: Boolean) = withContext(Dispatchers.IO) {
         var counter = 0
         val chapters = ArrayList(webPages)
         val chaptersSettingsList = chapterSettings ?: return@withContext
-        dbHelper.writableDatabase.runTransaction { writableDatabase ->
+        db.runInTransaction {
             chapters.forEach { webPage ->
-                val webPageSettings = chaptersSettingsList.firstOrNull { it.url == webPage.url } ?: return@runTransaction
+                val webPageSettings = chaptersSettingsList.firstOrNull { it.url == webPage.url } ?: return@forEach
                 webPageSettings.metadata[Constants.MetaDataKeys.IS_FAVORITE] = favoriteStatus.toString()
-                dbHelper.updateWebPageSettings(webPageSettings, writableDatabase)
+                db.webPageSettingsDao().update(webPageSettings)
                 actionModeProgress.postValue(counter++.toString())
             }
         }

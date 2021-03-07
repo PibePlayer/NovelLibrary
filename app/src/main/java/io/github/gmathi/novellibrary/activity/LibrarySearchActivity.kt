@@ -12,10 +12,9 @@ import com.bumptech.glide.request.RequestOptions
 import io.github.gmathi.novellibrary.R
 import io.github.gmathi.novellibrary.adapter.GenericAdapter
 import io.github.gmathi.novellibrary.dataCenter
-import io.github.gmathi.novellibrary.database.getAllNovels
 import io.github.gmathi.novellibrary.databinding.ActivityLibrarySearchBinding
 import io.github.gmathi.novellibrary.databinding.ListitemLibraryBinding
-import io.github.gmathi.novellibrary.dbHelper
+import io.github.gmathi.novellibrary.db
 import io.github.gmathi.novellibrary.util.system.hideSoftKeyboard
 import io.github.gmathi.novellibrary.util.system.startChaptersActivity
 import io.github.gmathi.novellibrary.util.system.startNovelDetailsActivity
@@ -31,7 +30,7 @@ class LibrarySearchActivity : AppCompatActivity(), GenericAdapter.Listener<Novel
 
     lateinit var adapter: GenericAdapter<Novel>
 
-    private val allNovelsList: List<Novel> = dbHelper.getAllNovels()
+    private val allNovelsList: List<Novel> = db.novelDao().getAll()
 
     private var isDateSorted = false
     private var isTitleSorted = false

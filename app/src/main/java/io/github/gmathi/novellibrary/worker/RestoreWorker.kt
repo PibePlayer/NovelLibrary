@@ -9,6 +9,7 @@ import android.text.format.Formatter
 import androidx.annotation.StringRes
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import androidx.sqlite.db.SimpleSQLiteQuery
 import androidx.work.CoroutineWorker
 import androidx.work.ForegroundInfo
 import androidx.work.WorkerParameters
@@ -16,10 +17,10 @@ import androidx.work.workDataOf
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import io.github.gmathi.novellibrary.R
-import io.github.gmathi.novellibrary.database.createNovel
-import io.github.gmathi.novellibrary.database.createNovelSection
-import io.github.gmathi.novellibrary.dbHelper
+import io.github.gmathi.novellibrary.database.AppDatabase
+import io.github.gmathi.novellibrary.db
 import io.github.gmathi.novellibrary.model.database.Novel
+import io.github.gmathi.novellibrary.model.database.NovelSection
 import io.github.gmathi.novellibrary.util.system.NotificationReceiver
 import io.github.gmathi.novellibrary.util.view.ProgressNotificationManager
 import io.github.gmathi.novellibrary.util.Constants
@@ -136,7 +137,7 @@ internal class RestoreWorker(context: Context, workerParameters: WorkerParameter
                         val novelSection = novelSectionsArray.getJSONObject(i)
                         val name = novelSection.getString("name")
                         oldIdMap[novelSection.getLong("id")] = name
-                        newIdMap[name] = dbHelper.createNovelSection(novelSection.getString("name"))
+                        newIdMap[name] = db.novelSectionDao().insert(NovelSection(0, novelSection.getString("name")))
                     }
                     nm.updateProgress(3)
                     for (i in 0 until novelsArray.length()) {
@@ -158,18 +159,30 @@ internal class RestoreWorker(context: Context, workerParameters: WorkerParameter
                         novel.novelSectionId =
                             newIdMap[oldIdMap[novelJson.getLong("novelSectionId")]]
                                 ?: -1L
-                        dbHelper.createNovel(novel)
+                        db.novelDao().insertNovel(novel)
                     }
                 }
                 nm.updateProgress(4)
 
                 //Restore Databases
                 if (shouldRestoreDatabase && backupDBsDir.exists() && backupDBsDir.isDirectory) {
+                    // Force write all queries & close database
+                    db.clearAllTables()
+                    db.novelDao().checkpoint(SimpleSQLiteQuery("pragma wal_checkpoint(full)"))
+                    db.close()
+
                     if (!currentDBsDir.exists()) currentDBsDir.mkdir()
                     nm.updateProgress(6) { setContentText(getString(R.string.title_library)) }
+                    currentDBsDir.listFiles().forEach {
+                        it.delete()
+                    }
                     backupDBsDir.listFiles()?.forEach {
                         Utils.copyFile(it, File(currentDBsDir, it.name))
                     }
+
+                    db = AppDatabase.createInstance(applicationContext)
+                    db.insertDefaults()
+                    db.novelDao().checkpoint(SimpleSQLiteQuery("pragma wal_checkpoint(full)"))
                 }
                 nm.updateProgress(8)
 

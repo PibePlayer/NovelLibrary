@@ -14,11 +14,9 @@ import com.tingyik90.snackprogressbar.SnackProgressBar
 import com.tingyik90.snackprogressbar.SnackProgressBarManager
 import io.github.gmathi.novellibrary.R
 import io.github.gmathi.novellibrary.adapter.GenericAdapter
-import io.github.gmathi.novellibrary.database.getNovelByUrl
-import io.github.gmathi.novellibrary.database.insertNovel
 import io.github.gmathi.novellibrary.databinding.ActivityImportLibraryBinding
 import io.github.gmathi.novellibrary.databinding.ListitemImportListBinding
-import io.github.gmathi.novellibrary.dbHelper
+import io.github.gmathi.novellibrary.db
 import io.github.gmathi.novellibrary.extensions.showEmpty
 import io.github.gmathi.novellibrary.extensions.showError
 import io.github.gmathi.novellibrary.extensions.showLoading
@@ -132,7 +130,7 @@ class ImportLibraryActivity : BaseActivity(), GenericAdapter.Listener<ImportList
                             importItem.novelImageUrl = styleAttr.substring(22, styleAttr.length - 3)
                         importItem.currentlyReadingChapterName = it.getElementsByClass("cr_status")?.firstOrNull()?.text()
                         importItem.currentlyReading = it.getElementsByClass("cr_status")?.firstOrNull()?.parent()?.text()
-                        importItem.isAlreadyInLibrary = dbHelper.getNovelByUrl(importItem.novelUrl!!) != null
+                        importItem.isAlreadyInLibrary = db.novelDao().findOneByUrl(importItem.novelUrl!!) != null
                         importItem
                     }
                     binding.contentImportLibrary.progressLayout.showContent()
@@ -312,7 +310,7 @@ class ImportLibraryActivity : BaseActivity(), GenericAdapter.Listener<ImportList
 
     private fun importNovelToLibrary(importListItem: ImportListItem) {
         val novel = NovelApi.getNUNovelDetails(importListItem.novelUrl!!) ?: return
-        novel.id = dbHelper.insertNovel(novel)
+        novel.id = db.novelDao().insertNovel(novel)
     }
 
     override fun onBackPressed() {

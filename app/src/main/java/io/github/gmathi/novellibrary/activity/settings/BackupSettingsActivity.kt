@@ -31,7 +31,8 @@ import io.github.gmathi.novellibrary.adapter.GenericAdapter
 import io.github.gmathi.novellibrary.dataCenter
 import io.github.gmathi.novellibrary.databinding.ActivitySettingsBinding
 import io.github.gmathi.novellibrary.databinding.ListitemTitleSubtitleWidgetBinding
-import io.github.gmathi.novellibrary.dbHelper
+import io.github.gmathi.novellibrary.NovelLibraryApplication.*
+import io.github.gmathi.novellibrary.db
 import io.github.gmathi.novellibrary.util.Constants.WORK_KEY_RESULT
 import io.github.gmathi.novellibrary.util.Utils
 import io.github.gmathi.novellibrary.util.view.CustomDividerItemDecoration
@@ -78,6 +79,7 @@ class BackupSettingsActivity : BaseActivity(), GenericAdapter.Listener<String> {
     private var workRequestId: UUID? = null
     
     private val isDeletingFiles = AtomicBoolean(false)
+    private val isBackup = AtomicBoolean(false)
     
     private lateinit var binding: ActivitySettingsBinding
 
@@ -370,9 +372,15 @@ class BackupSettingsActivity : BaseActivity(), GenericAdapter.Listener<String> {
                 if (workRequest != null) {
                     val workManager = WorkManager.getInstance(applicationContext)
                     workManager.enqueue(workRequest)
+                    isBackup.set(true)
+                    binding.contentRecyclerView.progressLayout.isEnabled = false
+
                     val observable = workManager.getWorkInfoByIdLiveData(workRequest.id)
                     observable.observe(this, Observer { info ->
                         if (info != null && arrayOf(State.SUCCEEDED, State.FAILED, State.CANCELLED).contains(info.state)) {
+                            isBackup.set(false)
+                            binding.contentRecyclerView.progressLayout.isEnabled = true
+
                             @Suppress("NON_EXHAUSTIVE_WHEN")
                             when (info.state) {
                                 State.SUCCEEDED -> showDialog(iconRes = R.drawable.ic_check_circle_white_vector, content = info.outputData.getString(WORK_KEY_RESULT))
@@ -417,7 +425,8 @@ class BackupSettingsActivity : BaseActivity(), GenericAdapter.Listener<String> {
             try {
                 deleteDir(cacheDir)
                 deleteDir(filesDir)
-                dbHelper.removeAll()
+                db.clearAllTables()
+                db.insertDefaults()
                 dataCenter.saveNovelSearchHistory(ArrayList())
 
                 async(Dispatchers.Main) {
@@ -446,7 +455,7 @@ class BackupSettingsActivity : BaseActivity(), GenericAdapter.Listener<String> {
     }
 
     override fun onBackPressed() {
-        if (isDeletingFiles.get()) {
+        if (isDeletingFiles.get() || isBackup.get()) {
             return
         }
 
